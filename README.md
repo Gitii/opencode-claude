@@ -51,7 +51,7 @@ Each OpenCode chat maps to one Claude Code session and resumes it on every messa
 
 ## Install
 
-You need [OpenCode](https://opencode.ai) 2.x and the [Claude Code CLI](https://www.npmjs.com/package/@anthropic-ai/claude-code) signed in to a Claude plan.
+You need [OpenCode](https://opencode.ai) 2.x and the [Claude Code CLI](https://www.npmjs.com/package/@anthropic-ai/claude-code) 2.1.314 or newer signed in to a Claude plan. OpenCode 2.2.3 is the validated dispatch-fixture target.
 
 1. Add the plugin:
 

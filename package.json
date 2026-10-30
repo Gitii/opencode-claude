@@ -54,8 +54,8 @@
     "access": "restricted"
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.3.224",
-    "zod": "^4.4.3"
+    "@anthropic-ai/claude-agent-sdk": "0.3.224",
+    "zod": "4.4.3"
   },
   "devDependencies": {
     "@opencode/plugin": "2.0.16",
