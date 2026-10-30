@@ -23,7 +23,7 @@ const runtime = (path: string) => ({
   sha256: sha256(realpathSync(path)),
 });
 const manifest = {
-  date: "2026-10-30",
+  date: process.env.PACKED_DATE ?? new Date().toISOString().slice(0, 10),
   sources: {
     ssd: process.env.SSD_SOURCE_SHA,
     fork: process.env.FORK_SOURCE_SHA,
