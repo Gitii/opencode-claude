@@ -49,6 +49,8 @@ Tools stay OpenCode's. Claude Code's built-in tools (its own Bash, Edit and so o
 
 Each OpenCode chat maps to one Claude Code session and resumes it on every message. That keeps Anthropic's prompt cache warm, which is what makes long sessions affordable on a plan.
 
+OpenCode's transformed system instructions and filtered tools are applied before each model step. When either changes while a Claude turn is parked on tools, the bridge drains that completed step, stops the old query, and resumes the session with the new snapshot. Identical snapshots keep the query. Claude Code's system-prompt snapshots are disabled so a resume cannot silently reuse old instructions; changed snapshots can add process/re-cache overhead.
+
 ## Install
 
 You need [OpenCode](https://opencode.ai) 2.x and the [Claude Code CLI](https://www.npmjs.com/package/@anthropic-ai/claude-code) 2.1.314 or newer signed in to a Claude plan. OpenCode 2.2.3 is the validated dispatch-fixture target.
@@ -89,7 +91,7 @@ You need [OpenCode](https://opencode.ai) 2.x and the [Claude Code CLI](https://w
 
 **Plan mode.** OpenCode's Plan agent works as usual: Claude is told it's in plan mode, and OpenCode blocks file edits.
 
-**Project instructions.** Claude Code reads `CLAUDE.md` itself, and a project's `AGENTS.md` where there is no `CLAUDE.md` (its `instructionFiles` setting). OpenCode-only instruction files, like `~/.config/opencode/AGENTS.md` or files in `instructions`, are passed on unless Claude Code already reads the same text.
+**Project instructions.** OpenCode's final transformed instructions are authoritative, including instruction-file edits and removals by other plugins. Bridge queries keep the Claude Code preset but disable native Claude user/project settings, instruction-file loading, hooks, and auto-memory. Configure instruction files and skills through OpenCode; native files are not independently reloaded behind its hooks. Claude CLI sign-in and account selection remain CLI-owned.
 
 **Skills and agents.** OpenCode's skills (from `.claude`, `.agents` and `.opencode`) are listed for Claude and load through OpenCode's skill tool. A custom agent's own prompt, like a `writer` subagent's, is passed on as that agent's role.
 

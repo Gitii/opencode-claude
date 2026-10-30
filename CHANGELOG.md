@@ -4,6 +4,8 @@
 
 - Publish the maintained Gitii fork as `@gitii/opencode-claude`, retaining the `claude-code` provider identity and upstream MIT attribution.
 - Build, test, and pack releases in the fork; publish immutable GitHub release artifacts with checksums.
+- Preserve arbitrary OpenCode system-hook edits and filtered tools for chat and auxiliary queries, including parked-turn updates and compaction.
+- Keep OpenCode authoritative for instruction files and skills instead of independently loading native Claude settings or auto-memory. Disable recorded system-prompt snapshots for correct resume updates.
 
 ## 1.7.0 - 2026-10-30
 
