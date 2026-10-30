@@ -31,11 +31,12 @@ async function main() {
   };
   assert.deepEqual(
     await sdkPrompt({ type: "preset", preset: "claude_code", excludeDynamicSections: true }),
-    { type: "preset", preset: "claude_code", excludeDynamicSections: true },
+    { type: "preset", preset: "claude_code", excludeDynamicSections: true, snapshot: false },
   );
   assert.deepEqual(await sdkPrompt({ type: "preset", preset: "claude_code" }), {
     type: "preset",
     preset: "claude_code",
+    snapshot: false,
   });
 
   const { post, proxy } = await startMockedProxy("dynamic-sections");
