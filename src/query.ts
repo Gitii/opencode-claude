@@ -417,9 +417,7 @@ export async function startClaudeQuery(
     settings.disableClaudeAiConnectors = true;
   }
 
-  // A resumed turn must use this request's system prompt, not the session's
-  // persisted snapshot. This CLI switch applies to initial queries too.
-  const extraArgs: Record<string, string> = { "system-prompt-snapshot": "off" };
+  const extraArgs: Record<string, string> = {};
   options.extraArgs = extraArgs;
   // Without these the CLI streams thinking blocks empty: the UI shows nothing
   // for as long as Claude thinks (tens of seconds), then the answer lands at
@@ -443,13 +441,18 @@ export async function startClaudeQuery(
     options.canUseTool = params.canUseTool;
   }
 
+  // Render the current instructions on every request, including resumed turns.
   const customSystemPrompt = trimmedString(params.systemPrompt);
   const presetSystemPrompt =
     typeof params.systemPrompt === "string"
       ? null
       : nonEmptyRecord(params.systemPrompt);
   if (customSystemPrompt) {
-    options.systemPrompt = customSystemPrompt;
+    options.systemPrompt = {
+      type: "custom",
+      prompt: customSystemPrompt,
+      snapshot: false,
+    };
   } else if (
     presetSystemPrompt?.type === "preset" &&
     presetSystemPrompt.preset === "claude_code"
@@ -459,7 +462,8 @@ export async function startClaudeQuery(
       preset: "claude_code";
       append?: string;
       excludeDynamicSections?: boolean;
-    } = { type: "preset", preset: "claude_code" };
+      snapshot: false;
+    } = { type: "preset", preset: "claude_code", snapshot: false };
     const append = trimmedString(presetSystemPrompt.append);
     if (append) systemPrompt.append = append;
     if (presetSystemPrompt.excludeDynamicSections === true) {
@@ -467,7 +471,7 @@ export async function startClaudeQuery(
     }
     options.systemPrompt = systemPrompt;
   } else {
-    options.systemPrompt = { type: "preset", preset: "claude_code" };
+    options.systemPrompt = { type: "preset", preset: "claude_code", snapshot: false };
   }
 
   if (nonEmptyRecord(params.mcpServers)) options.mcpServers = params.mcpServers;

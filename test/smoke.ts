@@ -75,18 +75,21 @@ async function main() {
 
     // Thinking streams as summaries unless thinking is off
     assert.equal(seen.settings.showThinkingSummaries, true);
-    assert.deepEqual(seen.extraArgs, { "system-prompt-snapshot": "off", "thinking-display": "summarized" });
+    assert.deepEqual(seen.extraArgs, { "thinking-display": "summarized" });
+    assert.deepEqual(seen.systemPrompt, { type: "preset", preset: "claude_code", snapshot: false });
     await startClaudeQuery({
       prompt: "x",
       cwd: process.cwd(),
       thinking: { type: "disabled" },
+      systemPrompt: "CURRENT_CUSTOM_INSTRUCTIONS",
       resume: "snapshot-resume",
       queryImpl: () => (input: any) => {
         seen = input.options;
         return (async function* () {})();
       },
     } as any);
-    assert.deepEqual(seen.extraArgs, { "system-prompt-snapshot": "off" });
+    assert.deepEqual(seen.extraArgs, {});
+    assert.deepEqual(seen.systemPrompt, { type: "custom", prompt: "CURRENT_CUSTOM_INSTRUCTIONS", snapshot: false });
     assert.equal(seen.resume, "snapshot-resume");
     assert.equal(seen.settings?.showThinkingSummaries, undefined);
   }
