@@ -3,8 +3,8 @@
  * text copy of the chat cut to 400k characters, with every tool result cut
  * to 1000. On a long chat it saw a fraction of the conversation. The summary
  * now resumes an in-memory fork of the chat's Claude session, cut where the
- * summarized part ends, on the chat's model with the chat turn's system
- * prompt and tools (same prompt cache), and nothing is written to it.
+ * summarized part ends, on the chat's model with current compaction system
+ * instructions and tools disabled, and nothing is written to it.
  * - A reminder after a reply that missed the template resumes at the same
  *   point with the summary prompt.
  * - A chat with no resumable session gets the history as text, sized to the
@@ -104,18 +104,20 @@ async function main() {
   };
 
   {
-    const params = await summarize("chat", [...older, user(SUMMARY_PROMPT)]);
+    const compactionSystem = "Current auxiliary instructions. COMPACTION_HOOK_MARKER";
+    const params = await summarize("chat", [{ role: "system", content: compactionSystem }, ...older, user(SUMMARY_PROMPT)]);
     assert.equal(params.resume, "chat-sess-1", "resumes the chat's Claude session");
     assert.equal(params.resumeSessionAt, "L2", "cut where the summarized part ends");
     assert.equal(params.forkSession, true);
     assert.equal(params.persistSession, false, "nothing written to the session");
     assert.equal(params.model, chatParams!.model, "the chat's model, not haiku");
-    assert.deepEqual(params.systemPrompt, chatParams!.systemPrompt, "same system prompt as the chat turn");
-    assert.ok(params.mcpServers, "same tools as the chat turn");
+    assert.equal(typeof params.systemPrompt, "string", "summary uses its own current utility instructions");
+    assert.ok((params.systemPrompt as string).includes(compactionSystem));
+    assert.equal(params.mcpServers, undefined, "utility requests advertise no tools");
     assert.equal(params.permissionMode, "dontAsk", "tool calls are refused");
     assert.equal(params.allowedTools, undefined);
     assert.equal(params.autoCompactEnabled, false);
-    assert.equal(params.env?.CLAUDE_CODE_DISABLE_AUTO_MEMORY, undefined, "keeps the chat's memory");
+    assert.equal(params.env?.CLAUDE_CODE_DISABLE_AUTO_MEMORY, "1", "utility turns use only their current supplied instructions");
     const text = await promptText(params.prompt);
     assert.ok(text.includes(SUMMARY_PROMPT));
     assert.ok(!text.includes("<conversation_history>"), "no text copy of the chat");

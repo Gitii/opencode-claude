@@ -1,14 +1,12 @@
-/**
- * Parts of OpenCode's system prompt that are the user's own setup rather
- * than OpenCode's boilerplate: project instruction files, MCP server notes
- * and the session context a host attached. The rest of that prompt (its stock prompt, model identity, date and
- * environment) is not forwarded; Claude Code brings its own.
- */
+/** Preserve OpenCode's final system text; only exact native-loaded files deduplicate. */
 import { readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, parse } from "node:path";
 import { claudeConfigDir } from "./config-dir.js";
 import { metaSystemPrompt } from "./request-kind.js";
+import { extractTextContent } from "./prompt.js";
+import { log } from "./log.js";
+import { OPENCODE_2_2_3_BUILD_PROMPT } from "./opencode-stock.js";
 
 type MessageLike = { role?: string; content?: unknown };
 
@@ -41,19 +39,6 @@ function projectDirs(cwd: string): Set<string> {
     dir = parent;
   }
   return dirs;
-}
-
-/**
- * Claude Code (2.1.28x) loads a project's AGENTS.md itself where the project
- * has no CLAUDE.md (its instructionFiles setting, "claude-md-or-agents-md"
- * by default), from the same places it reads CLAUDE.md. Those are its call.
- */
-function claudeCodeReadsAgentsMd(path: string, dirs: Set<string>): boolean {
-  const real = realPath(path);
-  const { base } = parse(real);
-  if (base !== "AGENTS.md") return false;
-  const dir = dirname(real);
-  return dirs.has(dir) || (parse(dir).base === ".claude" && dirs.has(dirname(dir)));
 }
 
 /** CLAUDE.md files Claude Code loads itself for this working directory. */
@@ -117,41 +102,72 @@ function withImports(files: string[]): string[] {
   return out;
 }
 
+function nativeInstructionTexts(cwd: string, configDir?: string): Set<string> {
+  const loaded = withImports(claudeMdFiles(cwd, configDir));
+  // AGENTS.md is native only where no CLAUDE.md takes its place.
+  for (const dir of projectDirs(cwd)) {
+    for (const candidate of [dir, join(dir, ".claude")]) {
+      if (readText(join(candidate, "CLAUDE.md")) === null) {
+        loaded.push(join(candidate, "AGENTS.md"));
+      }
+    }
+  }
+  return new Set(
+    loaded.map((file) => readText(file)?.trim()).filter((text): text is string => !!text),
+  );
+}
+
+/** Boundaries come from the wire, never from a prefix match against disk text. */
+function instructionSections(system: string): Array<{ start: number; end: number; text: string }> {
+  const headings = [...system.matchAll(INSTRUCTIONS_FROM)];
+  return headings.map((heading, i) => {
+    const start = heading.index!;
+    const end = headings[i + 1]?.index ?? system.length;
+    return { start, end, text: system.slice(start + heading[0].length, end).trim() };
+  });
+}
+
+/** Instruction-file view for callers that need just those sections. */
+export function openCodeInstructionFiles(messages: MessageLike[], cwd: string, configDir?: string): string {
+  const native = nativeInstructionTexts(cwd, configDir);
+  const system = metaSystemPrompt(messages);
+  return instructionSections(system)
+    .filter((section) => !native.has(section.text))
+    .map(({ start, end }) => system.slice(start, end).trim())
+    .join("\n\n");
+}
+
 /**
- * OpenCode's instruction files that Claude Code doesn't load itself (the
- * global ~/.config/opencode/AGENTS.md, configured `instructions`) as
- * "Instructions from: <path>" blocks, the way OpenCode renders them.
- * A file is read from disk and forwarded only when its text is in OpenCode's
- * prompt, so it is exactly what OpenCode loaded. Files Claude Code already
- * reads as CLAUDE.md (the same file through a symlink or an `@path` import,
- * or the same text) are skipped so the rules don't arrive twice.
+ * No provenance survives OpenAI lowering. Unknown/edited stock-like text stays
+ * whole, including catalogs and custom roles; extracting them again duplicates it.
+ * Utility queries disable native settings, so they deduplicate no files.
  */
-export function openCodeInstructionFiles(
+export function forwardedSystemInstructions(
   messages: MessageLike[],
   cwd: string,
   configDir?: string,
+  nativeFiles = true,
 ): string {
-  const system = metaSystemPrompt(messages);
-  const loaded = withImports(claudeMdFiles(cwd, configDir));
-  const loadedPaths = new Set(loaded.map(realPath));
-  const loadedTexts = new Set(
-    loaded.map((file) => readText(file)?.trim()).filter((text): text is string => !!text),
-  );
-  const dirs = projectDirs(cwd);
-  const blocks: string[] = [];
-  const seen = new Set<string>();
-  for (const match of system.matchAll(INSTRUCTIONS_FROM)) {
-    const path = match[1]!;
-    const real = realPath(path);
-    if (seen.has(real)) continue;
-    seen.add(real);
-    const text = readText(path)?.trim();
-    if (!text || !system.includes(text.slice(0, 200))) continue;
-    if (loadedPaths.has(real) || loadedTexts.has(text)) continue;
-    if (claudeCodeReadsAgentsMd(path, dirs)) continue;
-    blocks.push(`Instructions from: ${path}\n${text}`);
+  const native = nativeFiles ? nativeInstructionTexts(cwd, configDir) : new Set<string>();
+  const blocks = messages.filter((m) => m.role === "system").map((m) => extractTextContent(m.content));
+  if (blocks[0] !== OPENCODE_2_2_3_BUILD_PROMPT && /^\s*You are (?:an AI agent running in OpenCode|OpenCode|opencode)\b/.test(blocks[0] ?? "")) {
+    // Content-free drift diagnostic: no headings/prefixes authorize stripping.
+    log.info("[opencode-claude] preserving unmatched leading stock-like system block", {
+      systemBlockCount: blocks.length,
+      leadingCharacters: blocks[0]!.length,
+    });
   }
-  return blocks.join("\n\n");
+  return blocks.map((block) => {
+    if (block === OPENCODE_2_2_3_BUILD_PROMPT) return "";
+    let end = block.length;
+    let result = "";
+    for (const section of instructionSections(block).reverse()) {
+      if (!native.has(section.text)) continue;
+      result = block.slice(section.end, end) + result;
+      end = section.start;
+    }
+    return block.slice(0, end) + result;
+  }).filter(Boolean).join("\n\n");
 }
 
 /** OpenCode's `<mcp_instructions>` block: what MCP servers say about their tools. */

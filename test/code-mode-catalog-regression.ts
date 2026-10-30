@@ -4,7 +4,7 @@
  * Synthetic fixtures only; no Claude login, network requests, or private prompts.
  */
 import assert from "node:assert/strict";
-import { codeModeCatalog, customAgentPrompt, skillsCatalog } from "../src/request-kind.ts";
+import { codeModeCatalog, skillsCatalog } from "../src/request-kind.ts";
 
 const extract = (system: string) => codeModeCatalog([{ role: "system", content: system }]);
 const catalog = [
@@ -136,15 +136,5 @@ assert.equal(
 );
 assert.equal(skillsOf(environment), "");
 assert.equal(skillsCatalog([{ role: "user", content: skillsBlock }]), "");
-
-// A custom agent's own prompt sits before OpenCode's "# Your Model"; stock
-// prompts (build, plan, model-specific variants) are not forwarded.
-const identity = "# Your Model\n- Name: Opus 5.5\n- Provider ID: claude-code";
-const persona = "You hand-write text and data for the task you are given.\n\nNever use templates.";
-const agentOf = (system: string) => customAgentPrompt([{ role: "system", content: system }]);
-assert.equal(agentOf(`${persona}\n\n${identity}\n\n${catalog}`), persona);
-assert.equal(agentOf(`You are an AI agent running in OpenCode, a coding agent harness.\n\n# Harness\n- x\n\n${identity}`), "");
-assert.equal(agentOf(`You are OpenCode, an interactive general AI agent.\n\n${identity}`), "");
-assert.equal(agentOf(`${persona}\n\n${catalog}`), "", "no identity heading: layout unknown");
 
 console.log("code mode catalog regression ok");
