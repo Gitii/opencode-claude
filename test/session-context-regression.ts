@@ -53,7 +53,7 @@ async function main() {
     const first = [system, { role: "user", content: "fix the bug" }];
     await (await post("ctx", { messages: first })).json();
     assert.ok(seen[0]!.append.includes(GUIDANCE), "context entries reach Claude's system prompt");
-    assert.ok(!seen[0]!.append.includes("You are OpenCode"), "the rest of OpenCode's prompt stays out");
+    assert.ok(seen[0]!.append.includes(system.content), "unknown stock-like content is preserved whole");
 
     // A pinned note changed before the next message: OpenCode sends it as user text.
     const second = [

@@ -10,11 +10,7 @@
  */
 import { createHash, randomUUID } from "node:crypto";
 import { currentHost, mcpToolName, openCodeToolName } from "./host.js";
-import {
-  mcpInstructions,
-  openCodeInstructionFiles,
-  sessionContextBlocks,
-} from "./opencode-context.js";
+import { forwardedSystemInstructions } from "./opencode-context.js";
 import {
   bridgeRuntime,
   clearAllBridges,
@@ -100,7 +96,6 @@ import {
   createTurnInput,
   userHistoryFingerprints,
   withConversationContext,
-  withLeadingText,
   buildRuntimeInstructions,
   withSteering,
   type McpToolResultContent,
@@ -109,9 +104,6 @@ import {
 import {
   detectMetaRequestKind,
   metaSystemPrompt,
-  codeModeCatalog,
-  skillsCatalog,
-  customAgentPrompt,
   type MetaRequestKind,
   requestKeyNamespace,
 } from "./request-kind.js";
@@ -611,7 +603,7 @@ function excludeDynamicSections(): boolean {
   return (process.env.OPENCODE_CLAUDE_DYNAMIC_SECTIONS ?? "").trim().toLowerCase() !== "keep";
 }
 
-/** What a chat's last turn sent Claude, so its summary can hit the same cache. */
+/** Last chat turn's effective state and effort. */
 type ChatTurnProfile = {
   systemPrompt: ClaudeSystemPrompt;
   tools: OpenAITool[];
@@ -1122,14 +1114,10 @@ async function startNewTurn(input: {
   if (configDir) env.CLAUDE_CONFIG_DIR = configDir;
 
   const requestTools = Array.isArray(body.tools) ? body.tools : [];
-  // A resumed summary repeats the tools of the chat turn it continues.
-  const openCodeTools = summaryResume?.profile?.tools ?? requestTools;
+  const openCodeTools = requestTools;
   const isMetaRequest = metaKind !== null;
-  // Claude Code adds the user's auto-memory index to every turn, even with
-  // no setting sources. In a utility turn it leaks into the output: a title
-  // came back naming an unrelated project from a memory line. A summary that
-  // resumes the chat's session keeps it, like the chat turn it continues.
-  if (isMetaRequest && !summaryResume) env.CLAUDE_CODE_DISABLE_AUTO_MEMORY = "1";
+  // Claude Code's auto-memory can leak unrelated project context into utility output.
+  if (isMetaRequest) env.CLAUDE_CODE_DISABLE_AUTO_MEMORY = "1";
   const directoryHeader = req.headers.get(DIRECTORY_HEADER)?.trim();
   const requestDirectory = directoryHeader
     ? decodeURIComponent(directoryHeader)
@@ -1454,7 +1442,7 @@ async function startNewTurn(input: {
   const contextualPrompt = withConversationContext(turnPrompt, transcript, Boolean(resume));
 
   const mcpServers =
-    (!isMetaRequest || summaryResume) && openCodeTools.length > 0
+    !isMetaRequest && openCodeTools.length > 0
       ? await buildOpenCodeMcpServer(openCodeTools, pendingTools, notifyPark)
       : undefined;
 
@@ -1478,7 +1466,7 @@ async function startNewTurn(input: {
   const openCodeToolNames = openCodeTools
     .map((t) => t.function?.name)
     .filter((n): n is string => typeof n === "string" && n.length > 0);
-  const toolAliases = bridgeOpenCodeTools || (summaryResume && mcpServers)
+  const toolAliases = bridgeOpenCodeTools
     ? Object.fromEntries(
         openCodeToolNames.flatMap((name) => {
           const mcpName = mcpToolName(name);
@@ -1499,44 +1487,17 @@ async function startNewTurn(input: {
   const titleSource = [...messages]
     .reverse()
     .find((message) => message.role === "user");
-  // The task's instructions travel in the user message; the system prompt of
-  // a utility turn is only the fixed one-liner below.
-  const metaInstructions =
-    metaKind === "summary"
-      ? [
-          "<instructions>",
-          metaSystemPrompt(messages),
-          "This is a single-turn text transformation. Return only the requested summary. Do not inspect files, execute commands, or use tools.",
-          "</instructions>",
-        ].filter(Boolean).join("\n")
-      : metaKind === "generate"
-      ? [
-          "<instructions>",
-          metaSystemPrompt(messages) ||
-            "Follow the instructions in the user's message and return only the requested output.",
-          "</instructions>",
-        ].join("\n")
-      : "";
-  const mainPrompt = withLeadingText(contextualPrompt, metaInstructions);
+  const mainPrompt = contextualPrompt;
   const fastMode = !isMetaRequest && isFastModelId(selection.modelId);
   // A chat turn that can park on tools keeps its input open, so a message
   // the user sends while a tool runs reaches Claude as their own message.
   const turnInput = bridgeOpenCodeTools
     ? createTurnInput(typeof mainPrompt === "string" ? mainPrompt || " " : mainPrompt)
     : undefined;
-  // The host's title agent prompt (OpenChamber's title style, or the user's
-  // own `agents.title.system`) decides the title; OpenCode already frames its
-  // input as text to name. The built-in wording covers hosts that send none.
   const titleSystem = metaKind === "title" ? metaSystemPrompt(messages).trim() : "";
   const queryPrompt: string | AsyncIterable<SdkUserPrompt> = metaKind === "title"
     ? titleSystem
-      ? [
-          "<instructions>",
-          titleSystem,
-          "</instructions>",
-          "",
-          extractTextContent(titleSource?.content).trim(),
-        ].join("\n")
+      ? extractTextContent(titleSource?.content).trim() || " "
       : [
           "Create a concise 3-7 word session title for the request quoted below.",
           "Output only the title, with no quotation marks or punctuation at the end.",
@@ -1553,25 +1514,19 @@ async function startNewTurn(input: {
         ? mainPrompt || " "
         : promptAsStream(mainPrompt);
 
-  const codeMode = openCodeToolNames.includes("execute") ? codeModeCatalog(messages) : "";
-  const skills = openCodeToolNames.includes("skill") ? skillsCatalog(messages) : "";
-  const agentPrompt = customAgentPrompt(messages);
-  const instructionFiles = isMetaRequest ? "" : openCodeInstructionFiles(messages, cwd, configDir);
-  const sessionContext = isMetaRequest ? "" : sessionContextBlocks(messages);
-  const mcpNotes = openCodeToolNames.includes("execute") ? mcpInstructions(messages) : "";
-  // Stored in the chat's profile below, so a summary that resumes the chat
-  // repeats the same prompt, flag included, and still reads from the cache.
+  const forwardedSystem = forwardedSystemInstructions(messages, cwd, configDir, !isMetaRequest);
+  const utilitySystemPrompt = [
+    UTILITY_SYSTEM_PROMPT,
+    forwardedSystem,
+    "This is a single-turn text transformation. Return only the requested output. Do not inspect files, execute commands, or use tools.",
+  ].filter(Boolean).join("\n\n");
+  // Chat queries retain Claude Code's native preset.
   const chatSystemPrompt: ClaudeSystemPrompt = {
     type: "preset",
     preset: "claude_code",
     ...(excludeDynamicSections() ? { excludeDynamicSections: true } : {}),
     append: [
       buildRuntimeInstructions(),
-      ...(agentPrompt
-        ? [
-            `# Agent role (from the agent configuration in ${currentHost().name}; it defines who you are in this session and takes precedence over the generic role above)\n\n${agentPrompt}`,
-          ]
-        : []),
       ...(bridgeOpenCodeTools
         ? [
             [
@@ -1580,18 +1535,9 @@ async function startNewTurn(input: {
             ].join(" "),
           ]
         : []),
-      ...(bridgeOpenCodeTools && codeMode
-        ? [`${codeMode}\n\nThe \`execute\` tool above is ${mcpToolName("execute")}.`]
-        : []),
-      ...(bridgeOpenCodeTools && mcpNotes ? [mcpNotes] : []),
-      ...(bridgeOpenCodeTools && skills
-        ? [`${skills}\n\nThe skill tool above is ${mcpToolName("skill")}.`]
-        : []),
-      ...(instructionFiles
-        ? [`# Project instructions (loaded by ${currentHost().name})\n\n${instructionFiles}`]
-        : []),
-      ...(sessionContext
-        ? [`# Session context (attached by ${currentHost().name})\n\n${sessionContext}`]
+      forwardedSystem,
+      ...(bridgeOpenCodeTools
+        ? [`OpenCode tool names refer to their ${mcpToolName("*")} bridge equivalents. Only the tools provided for this turn are available.`]
         : []),
     ].join("\n\n"),
   };
@@ -1615,11 +1561,8 @@ async function startNewTurn(input: {
   handle = withGracefulStop(await queryStarter(
     summaryResume
       ? {
-          // The summary continues an in-memory fork of the chat's Claude
-          // session, cut where OpenCode's summarized part ends. The request
-          // repeats the chat turn's system prompt, tools and thinking, so it
-          // reads the conversation from the prompt cache; nothing is written
-          // to the session or to disk.
+          // Summarize an in-memory fork at the correct leaf, with the current
+          // compaction instructions and no executable tools or native settings.
           prompt: queryPrompt,
           cwd,
           model: queryModel,
@@ -1629,23 +1572,17 @@ async function startNewTurn(input: {
           persistSession: false,
           effort: summaryResume.profile?.effort ?? selection.effort,
           env,
-          mcpServers,
+          mcpServers: undefined,
           autoCompactEnabled: false,
-          // A tool call is refused (dontAsk with nothing allowed), so one
-          // extra turn lets Claude write the summary after it.
-          maxTurns: 2,
+          maxTurns: 1,
           isolateMcp: true,
           tools: [],
-          toolAliases,
+          toolAliases: undefined,
+          thinking: { type: "disabled" },
+          settingSources: [],
+          skills: [],
           permissionMode: "dontAsk",
-          systemPrompt: summaryResume.profile?.systemPrompt ?? {
-            type: "preset",
-            preset: "claude_code",
-            // The chat's session was started without the dynamic sections in
-            // its system prompt; repeating them here would add them twice.
-            ...(excludeDynamicSections() ? { excludeDynamicSections: true } : {}),
-            append: buildRuntimeInstructions(),
-          },
+          systemPrompt: utilitySystemPrompt,
         }
       : {
     prompt: queryPrompt,
@@ -1679,10 +1616,9 @@ async function startNewTurn(input: {
     // dontAsk runs exactly the allowed tools and refuses the rest. Not
     // bypassPermissions: the CLI refuses to start with it as root.
     permissionMode: "dontAsk",
-    // Utility turns (titles, summaries, generate) need none of Claude Code's
-    // coding instructions: a one-line prompt that names the host keeps them
-    // ~15x smaller. Chat turns keep the Claude Code preset untouched.
-    systemPrompt: isMetaRequest ? UTILITY_SYSTEM_PROMPT : chatSystemPrompt,
+    // Utility queries use their own final transformed instructions, without
+    // Claude Code's coding preset. Chat queries keep the native preset.
+    systemPrompt: isMetaRequest ? utilitySystemPrompt : chatSystemPrompt,
   }));
 
   const bridge: ParkedBridge = {

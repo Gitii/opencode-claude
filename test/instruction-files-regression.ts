@@ -48,8 +48,8 @@ writeFileSync(globalAgents, "Global rules.\n");
 writeFileSync(join(process.env.CLAUDE_CONFIG_DIR, "CLAUDE.md"), "Global rules.\n");
 assert.equal(openCodeInstructionFiles(system([block(globalAgents, "Global rules.")]), onlyAgents), "");
 
-// A path whose text isn't in the prompt (changed on disk since) is not sent.
-assert.equal(openCodeInstructionFiles(system([block(opencodeGlobal, "Older text.")]), onlyAgents), "");
+// Disk changes never replace the final transformed wire text.
+assert.equal(openCodeInstructionFiles(system([block(opencodeGlobal, "Older text.")]), onlyAgents), block(opencodeGlobal, "Older text."));
 
 // The global CLAUDE.md imports the OpenCode-only file with `@path`: Claude
 // Code expands the import itself, so the file is not forwarded again.
