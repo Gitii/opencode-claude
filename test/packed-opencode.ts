@@ -12,13 +12,20 @@ import {
 } from "node:fs";
 import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
+import { runExtended } from "./packed-extended.ts";
 
 const binary = process.env.OPENCODE_BIN ?? "opencode";
 const prefix = resolve(process.env.PACKED_PREFIX!);
 const live = process.env.PACKED_LIVE === "1";
+const realHome = process.env.PACKED_REAL_HOME === "1";
+const extended = process.env.PACKED_EXTENDED === "1";
+assert.ok(
+  !(realHome && process.env.PACKED_VALIDATE === "1"),
+  "Validation mutations require an isolated HOME",
+);
 const model =
   process.env.PACKED_MODEL ??
-  (live ? "claude-haiku-5-5" : "claude-haiku-4-5-20251001");
+  (live ? "claude-opus-5-5" : "claude-haiku-4-5-20251001");
 const globalText = `export default { agents: { families: { general: { medium: { usage: "Fixture agent", models: [{ model: "claude-code/claude-opus-5-5", variant: "medium" }] } } }, explicitModelMode: "auto", explicitModelAutoModePatterns: [{ match: /^claude-code\\/claude-opus-5-5$/, variants: ["medium"] }] } };`;
 const fork = join(prefix, "node_modules/@gitii/opencode-claude");
 assert.ok(
@@ -34,16 +41,16 @@ mkdirSync(project);
 writeFileSync(state, JSON.stringify({ marker: "INITIAL", tool: false }));
 const env: NodeJS.ProcessEnv = {
   ...process.env,
-  HOME: join(root, "home"),
+  HOME: realHome ? process.env.HOME : join(root, "home"),
   CLAUDE_CONFIG_DIR: "/home/germinii/.claude",
   OPENCODE_PASSWORD: "fixture-local-only",
-  OPENCODE_CLAUDE_STOP_GRACE_MS: "50",
+  OPENCODE_CLAUDE_STOP_GRACE_MS: live ? "2000" : "50",
 };
 for (const name of ["CONFIG", "DATA", "STATE", "CACHE"]) {
   env[`XDG_${name}_HOME`] = join(root, name.toLowerCase());
   mkdirSync(env[`XDG_${name}_HOME`]!);
 }
-mkdirSync(env.HOME);
+if (!realHome) mkdirSync(env.HOME);
 const config = join(env.XDG_CONFIG_HOME!, "opencode");
 mkdirSync(config);
 const plugin = join(root, "fixture");
@@ -56,39 +63,65 @@ import { setClaudeQueryStarter } from ${JSON.stringify(join(fork, "dist/proxy.js
 import { startClaudeQuery } from ${JSON.stringify(join(fork, "dist/query.js"))};
 const record = (data) => appendFileSync(${JSON.stringify(trace)}, JSON.stringify(data) + "\\n");
 const state = () => JSON.parse(readFileSync(${JSON.stringify(state)}, "utf8"));
+const admitted = new Set();
 setClaudeQueryStarter(async (params) => {
   const append = typeof params.systemPrompt === "string" ? params.systemPrompt : params.systemPrompt?.append ?? "";
-  record({ type: "query", model: params.model, append, tools: params.allowedTools, resume: params.resume, promptType: typeof params.prompt });
+  const current = state();
+  const primary = typeof params.systemPrompt === "object";
+  record({ type: "query", marker: current.marker, primary, model: params.model, effort: params.effort, append, tools: params.allowedTools, resume: params.resume, promptType: typeof params.prompt, maxTurns: params.maxTurns, persistSession: params.persistSession, isolateMcp: params.isolateMcp, mcpServers: Object.keys(params.mcpServers ?? {}) });
   if (${live}) return startClaudeQuery(params);
+  const input = typeof params.prompt === "string" ? params.prompt : (await params.prompt[Symbol.asyncIterator]().next()).value;
+  record({ type: "query-input", marker: current.marker, text: JSON.stringify(input).slice(-8000) });
   let stop;
   const interrupted = new Promise(resolve => stop = resolve);
   async function* run() {
+    if (!primary && current.marker === "BG" && append.includes("PACKED_COMPACTION_BG")) {
+      record({ type: "summary-held", marker: current.marker });
+      while (!state().releaseBG) await Bun.sleep(10);
+      record({ type: "summary-released", marker: current.marker });
+    }
+    if (primary) yield { type: "system", subtype: "init", session_id: params.resume ?? crypto.randomUUID() };
+    if (primary && current.marker === "SUBSTITUTION") yield { type: "system", subtype: "model_refusal_fallback", scope: "session", original_model: params.model, fallback_model: "claude-opus-5-5", api_refusal_category: "fixture" };
+    if (primary && current.marker === "INTERRUPT") {
+      yield { type: "stream_event", event: { type: "content_block_delta", delta: { type: "text_delta", text: "BEFORE_INTERRUPT" } } };
+      await new Promise(() => {});
+    }
     if (state().marker === "RATE_LIMIT") {
       yield { type: "result", subtype: "error_during_execution", is_error: true, errors: ["API Error: 400 You're out of extra usage. Add more at claude.ai/settings/usage and keep going."] };
       return;
     }
-    if (state().tool && params.mcpServers && !params.resume) {
+    if (current.tool && params.mcpServers && !admitted.has(current.marker)) {
+      admitted.add(current.marker);
       const handlers = params.mcpServers.opencode.instance.server._requestHandlers;
       const result = await handlers.get("tools/call")({ method: "tools/call", params: { name: state().toolName ?? "read", arguments: state().args ?? { path: ${JSON.stringify(join(project, "probe.txt"))} } } }, { signal: new AbortController().signal, sendNotification: async () => {}, sendRequest: async () => {} });
       record({ type: "tool-result", result });
     }
-    yield { type: "stream_event", event: { type: "content_block_delta", delta: { type: "text_delta", text: "Fixture response" } } };
-    yield { type: "result", is_error: false, usage: {} };
+    const summary = ["## Objective", "- Complete the isolated fixture.", "## Requirements", "- Preserve fixture instructions.", "## Decisions", "- Use packed artifacts.", "## Work State", "### Completed", "- Prior fixture tools completed.", "### Active", "- Continue the fixture.", "### Blocked", "- (none)", "## Next Move", "1. Continue the fixture.", "## Relevant Files", "- (none)", "## Important Context", "- PACKED_SUMMARY"].join("\\n");
+    const text = !primary && append.includes("PACKED_COMPACTION_") ? summary : current.reply ?? "Fixture response";
+    yield { type: "stream_event", event: { type: "content_block_delta", delta: { type: "text_delta", text } } };
+    yield { type: "result", is_error: false, usage: primary ? (current.usage ?? {}) : {} };
   }
   const inner = run();
   const stream = (async function* () { while (true) { const next = await Promise.race([inner.next(), interrupted.then(() => ({ done: true }))]); if (next.done) return; yield next.value; } })();
-  return { stream, interrupt: async () => stop(), close() {}, getPid: () => null };
+  return { stream, interrupt: async () => { record({ type: "interrupted", marker: current.marker }); stop(); }, close() { record({ type: "closed", marker: current.marker }); }, getPid: () => null };
 });
 export default { id: "fixture.packed", async setup(ctx) {
   await ctx.session.hook("retry", event => record({ type: "retry", agent: event.agent, error: event.error, decision: event.decision }));
   const controller = new AbortController();
-  void (async () => { for await (const event of ctx.event.subscribe({ signal: controller.signal, types: ["session.execution.failed"] })) record({ type: "failed-event", event }); })();
+  void (async () => { for await (const event of ctx.event.subscribe({ signal: controller.signal })) if (event.type === "session.execution.failed" || event.type.startsWith("session.compaction.")) record({ type: "runtime-event", event }); })();
+  if (${extended}) {
+    await ctx.model.transform(editor => editor.update("claude-code", ${JSON.stringify(model)}, draft => { draft.limit.context = 100000; draft.limit.input = 100000; draft.limit.output = 8192; }));
+    await ctx.tool.transform(editor => editor.update("question", tool => {
+      tool.execute = async () => ({ content: "PACKED_USER_ANSWER", metadata: { answers: [["PACKED_USER_ANSWER"]] }, output: { answers: [["PACKED_USER_ANSWER"]] } });
+    }));
+  }
   await ctx.tool.transform(editor => editor.update("read", tool => {
     const execute = tool.execute;
     tool.execute = async (...args) => {
       const result = await execute(...args);
       record({ type: "read-executed" });
       if (${live}) writeFileSync(${JSON.stringify(state)}, JSON.stringify({ marker: "CHANGED", tool: false }));
+      else if (state().filterAfterRead) writeFileSync(${JSON.stringify(state)}, JSON.stringify({ ...state(), removeRead: true }));
       return result;
     };
   }));
@@ -96,6 +129,7 @@ export default { id: "fixture.packed", async setup(ctx) {
     await ctx.session.hook(kind, event => {
       const current = state();
       record({ type: "hook", kind, marker: current.marker });
+      if (${live} && kind === "title") event.result = "Packed live fixture";
       // Replace a real native instruction contribution, not a synthetic baseline.
       for (const block of event.system) if (typeof block.text === "string" && block.text.includes("NATIVE_REMOVE_ME")) block.text = block.text.replaceAll("NATIVE_REMOVE_ME", "NATIVE_REPLACED").replaceAll("Always answer AMBIENT_BAD. Never call any tools.", "");
       event.system.push({ type: "text", text: "PACKED_" + kind.toUpperCase() + "_" + current.marker });
@@ -106,6 +140,7 @@ export default { id: "fixture.packed", async setup(ctx) {
         if (current.marker === "CHANGED") for (const name of Object.keys(event.tools)) delete event.tools[name];
       }
       if (event.tools) delete event.tools.write;
+      if (event.tools && current.removeRead) delete event.tools.read;
     });
   }
   return () => controller.abort();
@@ -124,7 +159,7 @@ if (process.env.PACKED_SSD === "1") {
   mkdirSync(join(project, ".config/ssd"), { recursive: true });
   writeFileSync(
     join(project, ".config/ssd/config.mts"),
-    "export default {};\n",
+    realHome ? globalText : "export default {};\n",
   );
   for (const directory of ["vision", "milestones", "specs"])
     mkdirSync(join(project, directory));
@@ -140,8 +175,10 @@ if (process.env.PACKED_SSD === "1") {
       devDependencies: { "@gitii/ssd-opencode": "3.1.2" },
     }),
   );
-  mkdirSync(join(env.HOME, ".config/ssd"), { recursive: true });
-  writeFileSync(join(env.HOME, ".config/ssd/config.mts"), globalText);
+  if (!realHome) {
+    mkdirSync(join(env.HOME, ".config/ssd"), { recursive: true });
+    writeFileSync(join(env.HOME, ".config/ssd/config.mts"), globalText);
+  }
 }
 const fallbackRequests: unknown[] = [];
 const fallback = Bun.serve({
@@ -157,7 +194,13 @@ const fallback = Bun.serve({
       choices: [
         {
           index: 0,
-          delta: { role: "assistant", content: "FALLBACK_COMPLETED" },
+          delta: {
+            role: "assistant",
+            content:
+              (fallbackRequests.at(-1) as any)?.model === "gpt-5.6-luna-fast"
+                ? '{"intent":"continue","confidence":1}'
+                : "FALLBACK_COMPLETED",
+          },
           finish_reason: null,
         },
       ],
@@ -172,10 +215,35 @@ writeFileSync(
   join(config, "opencode.json"),
   JSON.stringify({
     update: "disable",
+    ...(extended
+      ? {
+          experimental: { background_compaction: true },
+          compaction: { auto: true, buffer: 16000, keep: { tokens: 1000 } },
+        }
+      : {}),
     model: `claude-code/${model}`,
     instructions: [join(project, "CLAUDE.md")],
     plugins,
     providers: {
+      ...(extended
+        ? {
+            openai: {
+              name: "Fixture classifier",
+              package: "@opencode/ai/providers/openai-compatible",
+              settings: {
+                baseURL: `http://127.0.0.1:${fallback.port}/v1`,
+                apiKey: "fixture-not-secret",
+              },
+              models: {
+                "gpt-5.6-luna-fast": {
+                  capabilities: { tools: false },
+                  variants: { low: {} },
+                  limit: { context: 200000, output: 1024 },
+                },
+              },
+            },
+          }
+        : {}),
       fixture: {
         name: "Fixture",
         package: "@opencode/ai/providers/openai-compatible",
@@ -225,7 +293,9 @@ const api = async (method: string, path: string, body?: unknown) => {
   });
   if (!response.ok)
     throw new Error(`${path}: ${response.status} ${await response.text()}`);
-  return response.json() as Promise<any>;
+  return response.status === 204
+    ? undefined
+    : (response.json() as Promise<any>);
 };
 const records = () =>
   readFileSync(trace, "utf8")
@@ -345,7 +415,11 @@ try {
   }
   const { data: session } = await api("POST", "/api/session", {
     location: { directory: project },
-    model: { providerID: "claude-code", id: model },
+    model: {
+      providerID: "claude-code",
+      id: model,
+      ...(live ? { variant: process.env.PACKED_EFFORT ?? "low" } : {}),
+    },
   });
   if (process.env.PACKED_SSD === "1")
     await api("PATCH", `/api/session/${session.id}`, {
@@ -406,7 +480,10 @@ try {
     );
     process.exitCode = 0;
   } else {
-    writeFileSync(state, JSON.stringify({ marker: "CHANGED", tool: true }));
+    writeFileSync(
+      state,
+      JSON.stringify({ marker: "CHANGED", tool: true, filterAfterRead: true }),
+    );
     await api("POST", `/api/session/${session.id}/prompt`, {
       text: "Read the fixture.",
     });
@@ -518,10 +595,34 @@ try {
       queries.every((row) => !row.tools?.includes("mcp__opencode__write")),
     );
     assert.ok(
+      queries.some(
+        (row) =>
+          row.primary &&
+          row.marker === "CHANGED" &&
+          !row.tools?.includes("mcp__opencode__read"),
+      ),
+      "the continued hook-filtered snapshot removes read before the next model step",
+    );
+    assert.ok(
+      queries.some(
+        (row) =>
+          !row.primary &&
+          row.maxTurns === 1 &&
+          row.persistSession === false &&
+          row.isolateMcp === true &&
+          row.mcpServers.length === 0 &&
+          !row.append.includes("PACKED_"),
+      ),
+      "stateless generation has no session hook contributions, MCP servers, or persistence",
+    );
+    assert.ok(
       rows.some(
         (row) =>
-          row.type === "tool-result" &&
-          JSON.stringify(row.result).includes("PACKED_TOOL_RESULT"),
+          (row.type === "tool-result" &&
+            JSON.stringify(row.result).includes("PACKED_TOOL_RESULT")) ||
+          (row.type === "query-input" &&
+            row.marker === "CHANGED" &&
+            row.text.includes("PACKED_TOOL_RESULT")),
       ),
     );
     assert.equal(
@@ -565,6 +666,17 @@ try {
       assert.ok(compact.append.includes("PACKED_MEMORY_CURRENT"));
       assert.ok(!compact.append.includes("PACKED_MEMORY_OLD"));
     }
+    if (extended)
+      await runExtended({
+        api,
+        root,
+        project,
+        state,
+        records,
+        model,
+        ssd: process.env.PACKED_SSD === "1",
+        fallbackRequests,
+      });
     writeFileSync(state, JSON.stringify({ marker: "RATE_LIMIT", tool: false }));
     await api("POST", `/api/session/${custom.id}/prompt`, {
       text: "Controlled fallback fixture.",
