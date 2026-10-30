@@ -1,6 +1,8 @@
 node_modules/
 dist/
 *.tsbuildinfo
+*.tasklist.md
+*.tgz
 .DS_Store
 
 # Local agent notes / environment-specific

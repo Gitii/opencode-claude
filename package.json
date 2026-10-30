@@ -1,6 +1,6 @@
 {
-  "name": "@openchamber/opencode-claude",
-  "version": "1.7.0",
+  "name": "@gitii/opencode-claude",
+  "version": "1.7.1",
   "description": "Claude Code in OpenCode — local CLI auth, Agent SDK harness, effort variants, tools/MCP, images & compact.",
   "license": "MIT",
   "type": "module",
@@ -27,11 +27,11 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/openchamber/opencode-claude.git"
+    "url": "git+https://github.com/Gitii/opencode-claude.git"
   },
-  "homepage": "https://github.com/openchamber/opencode-claude",
+  "homepage": "https://github.com/Gitii/opencode-claude",
   "bugs": {
-    "url": "https://github.com/openchamber/opencode-claude/issues"
+    "url": "https://github.com/Gitii/opencode-claude/issues"
   },
   "keywords": [
     "opencode",
@@ -51,7 +51,7 @@
     "node": ">=18"
   },
   "publishConfig": {
-    "access": "public"
+    "access": "restricted"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.3.224",

@@ -1,11 +1,13 @@
 # opencode-claude
 
-[![npm](https://img.shields.io/npm/v/%40openchamber%2Fopencode-claude?style=flat&labelColor=100F0F&color=24837B)](https://www.npmjs.com/package/@openchamber/opencode-claude)
-[![GitHub release](https://img.shields.io/github/v/release/openchamber/opencode-claude?style=flat&labelColor=100F0F&color=205EA6)](https://github.com/openchamber/opencode-claude/releases/latest)
+[![npm](https://img.shields.io/npm/v/%40gitii%2Fopencode-claude?style=flat&labelColor=100F0F&color=24837B)](https://www.npmjs.com/package/@gitii/opencode-claude)
+[![GitHub release](https://img.shields.io/github/v/release/Gitii/opencode-claude?style=flat&labelColor=100F0F&color=205EA6)](https://github.com/Gitii/opencode-claude/releases/latest)
 [![Discord](https://img.shields.io/badge/Discord-join.svg?style=flat&labelColor=100F0F&color=8B7EC8&logo=discord&logoColor=FFFCF0)](https://discord.gg/ZYRSdnwwKA)
 [![License](https://img.shields.io/badge/license-MIT-black?style=flat&labelColor=100F0F&color=EC8B49)](LICENSE)
 
 Use your Claude Pro or Max plan in [OpenCode](https://opencode.ai) and [OpenChamber](https://github.com/openchamber/openchamber).
+
+This is Gitii's maintained fork of [openchamber/opencode-claude](https://github.com/openchamber/opencode-claude), distributed as `@gitii/opencode-claude`. The provider ID stays `claude-code`. Install this fork for SSD's system-instruction compatibility; do not load it together with the upstream plugin. Changes and pull requests belong in this fork, not upstream.
 
 The plugin adds a **Claude Code** provider. Pick Opus, Fable, Sonnet or Haiku in OpenCode like any other model, and every request runs through the official [Claude Agent SDK](https://www.npmjs.com/package/@anthropic-ai/claude-agent-sdk) on top of the `claude` CLI installed on your machine. No API key, and the plugin never touches your Claude credentials.
 
@@ -49,18 +51,18 @@ Each OpenCode chat maps to one Claude Code session and resumes it on every messa
 
 ## Install
 
-You need [OpenCode](https://opencode.ai) 2.x and the [Claude Code CLI](https://www.npmjs.com/package/@anthropic-ai/claude-code) signed in to a Claude plan. OpenCode 1.x users stay on `@openchamber/opencode-claude@0.14`.
+You need [OpenCode](https://opencode.ai) 2.x and the [Claude Code CLI](https://www.npmjs.com/package/@anthropic-ai/claude-code) signed in to a Claude plan.
 
 1. Add the plugin:
 
    ```bash
-   opencode plugin add @openchamber/opencode-claude
+   opencode plugin add @gitii/opencode-claude@1.7.1
    ```
 
    Or add it to `~/.config/opencode/opencode.json` yourself:
 
    ```json
-   { "plugins": ["@openchamber/opencode-claude"] }
+   { "plugins": ["@gitii/opencode-claude@1.7.1"] }
    ```
 
 2. Sign in. If you already use Claude Code in a terminal, you're probably signed in. Check with `claude auth status`. Otherwise:
@@ -71,7 +73,7 @@ You need [OpenCode](https://opencode.ai) 2.x and the [Claude Code CLI](https://w
 
    You can also sign in from OpenCode or OpenChamber: choose **Claude Code**, then **Sign in with Claude Code CLI**. It opens the same Claude sign-in page and passes the code you paste to the CLI. If `claude` isn't installed, the same menu offers to install it.
 
-3. Restart OpenCode and pick a model under **Claude Code**:
+3. Pick a model under **Claude Code** (use `/reload` if the provider has not appeared yet):
 
    ```bash
    opencode run "Summarise this repository in five bullets." --model claude-code/claude-sonnet-5
@@ -100,13 +102,13 @@ CLAUDE_CONFIG_DIR=~/.claude-work claude auth login --claudeai
 ```
 
 ```json
-{ "plugins": [{ "package": "@openchamber/opencode-claude", "options": { "configDirs": { "~/work": "~/.claude-work" } } }] }
+{ "plugins": [{ "package": "@gitii/opencode-claude@1.7.1", "options": { "configDirs": { "~/work": "~/.claude-work" } } }] }
 ```
 
 **Compacting earlier.** On 1M models OpenCode compacts a chat near 850K tokens, and every step of a long chat re-reads all of it. To compact sooner, set `compactAt` in the plugin options; Claude still has its full window for a turn that runs over:
 
 ```json
-{ "plugins": [{ "package": "@openchamber/opencode-claude", "options": { "compactAt": 400000 } }] }
+{ "plugins": [{ "package": "@gitii/opencode-claude@1.7.1", "options": { "compactAt": 400000 } }] }
 ```
 
 **Model fallback.** If Claude Code declines a request on one model and retries on another (for example Fable to Opus), you'll see a note in the reasoning, and the session switches to the model that's actually answering.
@@ -124,7 +126,7 @@ Your plan's limits go mostly to context: each step of an agent loop re-reads the
 
 | What you see | What to do |
 | --- | --- |
-| No Claude Code provider in OpenCode | Check that `plugins` in `opencode.json` includes `@openchamber/opencode-claude`, then restart OpenCode |
+| No Claude Code provider in OpenCode | Check that `plugins` in `opencode.json` includes `@gitii/opencode-claude@1.7.1`, then use `/reload` |
 | Authentication error | Run `claude auth status`. If you're signed out or on an API key, run `claude auth login --claudeai` |
 | `claude` works with my company API key in the terminal but not in OpenCode | The plugin only runs on a Claude plan. With an API key or a company gateway you don't need this plugin at all: use OpenCode's built-in Anthropic provider |
 | "Model unavailable" on an old session | The model ids changed in 1.1. Pick the model again in that session |
@@ -134,7 +136,7 @@ Your plan's limits go mostly to context: each step of an agent loop re-reads the
 **Debug log.** Add `"options": { "debug": true }` to the plugin entry:
 
 ```json
-{ "plugins": [{ "package": "@openchamber/opencode-claude", "options": { "debug": true } }] }
+{ "plugins": [{ "package": "@gitii/opencode-claude@1.7.1", "options": { "debug": true } }] }
 ```
 
 The log goes to `~/.local/share/opencode-claude/debug.log`. It records one line per turn with token usage (steps, context per step, cache reads and writes), which is the quickest way to see where your limits go.
@@ -164,9 +166,13 @@ bun run test
 
 To try a local build, point `plugins` at the checkout folder: `{ "plugins": ["/path/to/opencode-claude"] }`.
 
-Releases are cut with the **Release** workflow in GitHub Actions. It bumps the version, runs the tests, tags, and publishes to npm.
+Set the version in `package.json` on a reviewed branch. CI builds, tests, and packs the package. After merge, run the fork's **Release** workflow on `main`; it builds/tests the merged source and publishes a GitHub release containing the npm tarball and SHA-256 checksum. Versions and release assets are immutable.
 
-Issues and pull requests are welcome at [openchamber/opencode-claude](https://github.com/openchamber/opencode-claude). Sibling plugins: [opencode-cursor](https://github.com/openchamber/opencode-cursor) and [opencode-commandcode](https://github.com/openchamber/opencode-commandcode).
+An npm publisher can publish that exact tested tarball with `npm publish gitii-opencode-claude-<version>.tgz --access restricted`. Never publish under the upstream package name. For artifact-only installation, verify the release checksum, install its tarball in a dedicated directory with `npm install --prefix <directory> <tarball>`, and put the absolute `<directory>/node_modules/@gitii/opencode-claude` path in OpenCode's `plugins` list. This loads the same package without requiring registry publication.
+
+Before release, validate packed artifacts from the fork and SSD in an isolated OpenCode service; record source commits, package versions, hashes and runtime versions. Preserve the compatibility fixes when adopting upstream updates and recapture request fixtures if the supported OpenCode layout changes. Keeping Claude Code's native preset does not reproduce the old Anthropic provider's entire prompt or guarantee identical model behavior.
+
+Issues and pull requests for this fork belong at [Gitii/opencode-claude](https://github.com/Gitii/opencode-claude). Upstream attribution and the MIT license are preserved.
 
 ## License
 
