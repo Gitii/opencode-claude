@@ -235,12 +235,17 @@ export async function runExtended({
     (row: any) =>
       row.type === "query-input" && row.marker === "TRANSFER_RETURN",
   );
+  const foreignAnswerInResumedInput = inputs.some((row: any) =>
+    row.text.includes("FALLBACK_COMPLETED"),
+  );
+  assert.ok(
+    foreignAnswerInResumedInput,
+    "the foreign provider's answer must reach the resumed Claude input",
+  );
   result.providerRoundtrip = {
     sessionID: transfer.id,
     originalUserForwarded: true,
-    foreignAnswerInResumedInput: inputs.some((row: any) =>
-      row.text.includes("FALLBACK_COMPLETED"),
-    ),
+    foreignAnswerInResumedInput,
     result: "pass",
     caveat:
       "Text transcript transfer is not a lossless native SDK conversation conversion",
