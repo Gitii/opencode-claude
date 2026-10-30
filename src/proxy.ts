@@ -603,15 +603,34 @@ function excludeDynamicSections(): boolean {
   return (process.env.OPENCODE_CLAUDE_DYNAMIC_SECTIONS ?? "").trim().toLowerCase() !== "keep";
 }
 
-/** Last chat turn's effective state and effort. */
+/** Last chat turn's effort; instruction/tool state always comes from the wire. */
 type ChatTurnProfile = {
-  systemPrompt: ClaudeSystemPrompt;
-  tools: OpenAITool[];
   effort?: ClaudeEffort;
 };
 
 const chatTurnProfiles = new Map<string, ChatTurnProfile>();
 const MAX_CHAT_TURN_PROFILES = 64;
+
+function requestCwd(req: Request): string {
+  const directory = req.headers.get(DIRECTORY_HEADER)?.trim();
+  return process.env.OPENCODE_CLAUDE_CWD ||
+    (directory ? decodeURIComponent(directory) : process.cwd());
+}
+
+// Object property order and tool-list order do not change the effective tools.
+function canonicalSnapshot(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalSnapshot).join(",")}]`;
+  if (value && typeof value === "object") {
+    return `{${Object.entries(value).sort(([a], [b]) => a.localeCompare(b))
+      .map(([key, item]) => `${JSON.stringify(key)}:${canonicalSnapshot(item)}`).join(",")}}`;
+  }
+  return JSON.stringify(value) ?? "null";
+}
+
+function contextSnapshot(system: string, tools: OpenAITool[]): string {
+  return canonicalSnapshot([system, [...tools].sort((a, b) =>
+    (a.function?.name ?? "").localeCompare(b.function?.name ?? ""))]);
+}
 
 /** Where in the chat's Claude session a compaction summary picks up. */
 type SummaryResumePoint = {
@@ -925,6 +944,49 @@ async function handleChatCompletions(
     }
   }
   if (existing && existing.pendingTools.size > 0) {
+    const tools = Array.isArray(body.tools) ? body.tools : [];
+    existing.admittedToolNames?.clear();
+    for (const tool of tools) {
+      if (tool.function?.name) existing.admittedToolNames?.add(tool.function.name);
+    }
+    const snapshot = contextSnapshot(
+      forwardedSystemInstructions(messages),
+      tools,
+    );
+    const changed = existing.contextSnapshot !== snapshot;
+    // Hold the entire step until all admitted calls finish. A later partial
+    // dispatch can change the system state; no result may reach an obsolete
+    // query or be recorded there and then replayed in its replacement.
+    existing.completedResults ??= new Map();
+    existing.completedMessages ??= new Map();
+    for (const id of existing.pendingTools.keys()) {
+      const result = toolResults.get(id);
+      if (result) existing.completedResults.set(id, result);
+      const message = messages.find((m) => m.role === "tool" && m.tool_call_id === id);
+      if (message) existing.completedMessages.set(id, { ...message, role: "tool", tool_call_id: id });
+    }
+    const outstanding = [...existing.pendingTools.values()].filter((tool) =>
+      !existing!.completedResults!.has(tool.id));
+    if (outstanding.length > 0) {
+      const held = (async function* () { yield { type: "__park__", tools: outstanding }; })();
+      return stream
+        ? streamOpenAIResponse(held, body.model || model, existing)
+        : collectTurnResponse(held, body.model || model, existing);
+    }
+    for (const [id, result] of existing.completedResults) toolResults.set(id, result);
+    for (const [id, message] of existing.completedMessages) {
+      if (!messages.some((m) => m.role === "tool" && m.tool_call_id === id)) messages.push(message);
+    }
+    existing.completedResults = undefined;
+    existing.completedMessages = undefined;
+    if (changed) {
+      // Interrupt first and drain the CLI's interruption leaf before
+      // rebuilding the completed step with the current system state.
+      await stopConversationBridges(existing.conversationKey, "System instructions or tools changed");
+      existing = undefined;
+    }
+  }
+  if (existing && existing.pendingTools.size > 0) {
     let resolved = 0;
     // User messages sent while the tool ran ride the last tool result
     // resolved now. Results of one park can arrive over several resume
@@ -1116,14 +1178,9 @@ async function startNewTurn(input: {
   const requestTools = Array.isArray(body.tools) ? body.tools : [];
   const openCodeTools = requestTools;
   const isMetaRequest = metaKind !== null;
-  // Claude Code's auto-memory can leak unrelated project context into utility output.
-  if (isMetaRequest) env.CLAUDE_CODE_DISABLE_AUTO_MEMORY = "1";
-  const directoryHeader = req.headers.get(DIRECTORY_HEADER)?.trim();
-  const requestDirectory = directoryHeader
-    ? decodeURIComponent(directoryHeader)
-    : undefined;
-  const cwd =
-    process.env.OPENCODE_CLAUDE_CWD || requestDirectory || process.cwd();
+  // Only OpenCode's transformed state may supply project instructions/memory.
+  env.CLAUDE_CODE_DISABLE_AUTO_MEMORY = "1";
+  const cwd = requestCwd(req);
   const bridgeId = randomUUID();
   const pendingTools = new Map<string, ParkedToolCall>();
   let handle: StoppableClaudeQueryHandle | null = null;
@@ -1441,9 +1498,11 @@ async function startNewTurn(input: {
       : prompt;
   const contextualPrompt = withConversationContext(turnPrompt, transcript, Boolean(resume));
 
+  const admission = new Set(openCodeTools.flatMap((t) => t.function?.name ? [t.function.name] : []));
   const mcpServers =
     !isMetaRequest && openCodeTools.length > 0
-      ? await buildOpenCodeMcpServer(openCodeTools, pendingTools, notifyPark)
+      ? await buildOpenCodeMcpServer(openCodeTools, pendingTools, notifyPark,
+          (name) => admission.has(name))
       : undefined;
 
   const bridgeOpenCodeTools = !isMetaRequest && openCodeTools.length > 0;
@@ -1514,7 +1573,7 @@ async function startNewTurn(input: {
         ? mainPrompt || " "
         : promptAsStream(mainPrompt);
 
-  const forwardedSystem = forwardedSystemInstructions(messages, cwd, configDir, !isMetaRequest);
+  const forwardedSystem = forwardedSystemInstructions(messages);
   const utilitySystemPrompt = [
     UTILITY_SYSTEM_PROMPT,
     forwardedSystem,
@@ -1548,8 +1607,6 @@ async function startNewTurn(input: {
       chatTurnProfiles.delete(chatTurnProfiles.keys().next().value!);
     }
     chatTurnProfiles.set(conversationKey, {
-      systemPrompt: chatSystemPrompt,
-      tools: openCodeTools,
       effort: selection.effort,
     });
   }
@@ -1603,8 +1660,8 @@ async function startNewTurn(input: {
     // and compete with OpenCode's own tools.
     isolateMcp: true,
     thinking: isMetaRequest ? { type: "disabled" } : undefined,
-    settingSources: isMetaRequest ? [] : undefined,
-    skills: isMetaRequest ? [] : undefined,
+    settingSources: [],
+    skills: [],
     // Claude Code's built-in tools are never enabled: every tool runs through
     // OpenCode, which owns permissions. A turn with no OpenCode tools gets no
     // tools at all instead of an auto-approved Bash/Edit.
@@ -1632,6 +1689,8 @@ async function startNewTurn(input: {
     createdAt: Date.now(),
     input: turnInput,
     configDir,
+    contextSnapshot: contextSnapshot(forwardedSystem, openCodeTools),
+    admittedToolNames: admission,
   };
   // Session binding and resume point follow every event the turn yields,
   // including the ones stop() reads after an interrupt: for a turn stopped
@@ -2034,6 +2093,7 @@ export async function buildOpenCodeMcpServer(
   tools: OpenAITool[],
   pendingTools: Map<string, ParkedToolCall>,
   onPark: () => void,
+  isAvailable: (name: string) => boolean = () => true,
 ): Promise<Record<string, unknown> | undefined> {
   try {
     const sdk = await import("@anthropic-ai/claude-agent-sdk");
@@ -2163,6 +2223,9 @@ export async function buildOpenCodeMcpServer(
           description,
           shape,
           async (args: Record<string, unknown>) => {
+            if (!isAvailable(name)) {
+              return { content: [{ type: "text", text: `Tool ${name} is unavailable in the current OpenCode tool snapshot.` }], isError: true };
+            }
             const id = `call_${randomUUID().replace(/-/g, "").slice(0, 24)}`;
             const pending: ParkedToolCall = {
               id,
@@ -2205,7 +2268,7 @@ export async function buildOpenCodeMcpServer(
     if (typeof mcpServer?.setRequestHandler === "function") {
       mcpServer.setRequestHandler(
         z.object({ method: z.literal("tools/list"), params: z.any().optional() }),
-        async () => ({ tools: listed }),
+        async () => ({ tools: listed.filter((tool) => isAvailable(tool.name)) }),
       );
     }
 
