@@ -13,7 +13,7 @@ mkdirSync(configDir);
 mkdirSync(cwd);
 const system = (text: string) => ({ role: "system", content: text });
 const user = { role: "user", content: "Fixture user request." };
-const forward = (blocks: string[], native = true) => forwardedSystemInstructions(blocks.map(system), cwd, configDir, native);
+const forward = (blocks: string[]) => forwardedSystemInstructions(blocks.map(system));
 
 const original = "First plugin contribution.";
 const added = "Unknown instructions without a recognized heading.";
@@ -48,15 +48,15 @@ try {
 }
 assert.match(diagnostics.join("\n"), /unmatched leading stock-like.*systemBlockCount.*leadingCharacters/);
 assert.doesNotMatch(diagnostics.join("\n"), /STOCK_PLUGIN_SECRET/);
-assert.equal(forwardedSystemInstructions([{ role: "system", content: [{ type: "text", text: original }, { type: "text", text: added }] }, user], cwd, configDir), `${original}\n${added}`);
+assert.equal(forwardedSystemInstructions([{ role: "system", content: [{ type: "text", text: original }, { type: "text", text: added }] }, user]), `${original}\n${added}`);
 
 const nativeText = "Native rules shared with Claude Code.";
 writeFileSync(join(cwd, "CLAUDE.md"), `${nativeText}\n`);
 const instruction = (text: string) => `Instructions from: ${join(cwd, "CLAUDE.md")}\n${text}`;
-assert.equal(forward([instruction(nativeText)]), "");
+assert.equal(forward([instruction(nativeText)]), instruction(nativeText));
 assert.equal(forward([instruction(`${nativeText}\nPlugin addition`)]), instruction(`${nativeText}\nPlugin addition`));
 assert.equal(forward([instruction("Plugin replacement")]), instruction("Plugin replacement"));
-assert.equal(forward([instruction(nativeText)], false), instruction(nativeText), "utilities load no native files");
+assert.equal(forward([]), "", "removed native instructions are not reconstructed from disk");
 // Identical first 200 characters or path must not hide an edited suffix.
 const long = "x".repeat(250);
 writeFileSync(join(cwd, "CLAUDE.md"), `${long}\n`);
@@ -91,12 +91,24 @@ try {
       assert.equal(prompt.append.split(marker).length - 1, blocks.includes(marker) ? 1 : 0, "no selective extraction duplicates");
     }
     assert.deepEqual(params.tools, []);
+    assert.deepEqual(params.settingSources, [], "OpenCode owns instruction-file loading");
+    assert.deepEqual(params.skills, [], "native skill discovery cannot bypass OpenCode's catalog");
+    assert.equal(params.env?.CLAUDE_CODE_DISABLE_AUTO_MEMORY, "1");
     assert.deepEqual(params.allowedTools, ["mcp__opencode__bash"]);
     assert.equal(params.toolAliases?.write, undefined);
     const listed = await mcpHandlers(params).get("tools/list")!({ method: "tools/list", params: {} }, mcpExtra);
     assert.deepEqual(listed.tools.map((tool: any) => tool.name), ["bash"]);
     const removed = await callTool(params, "write", {});
     assert.equal((removed as any).isError, true, "a hook-removed tool cannot be admitted");
+  }
+
+  writeFileSync(join(cwd, "CLAUDE.md"), nativeText);
+  for (const text of [instruction(nativeText), instruction("HOOK_EDITED_FILE"), ""]) {
+    const params = await dispatch("wire-file", { tools: [], messages: [system(text), user] });
+    const append = (params.systemPrompt as { append: string }).append;
+    if (text) assert.ok(append.includes(text), "final file text is forwarded, including unchanged native text");
+    else assert.ok(!append.includes(nativeText), "removed file is not revived");
+    assert.deepEqual(params.settingSources, []);
   }
 
   const fixture = JSON.parse(readFileSync(new URL("./fixtures/opencode-2.2.3-dispatch.json", import.meta.url), "utf8"));
@@ -119,7 +131,7 @@ try {
     assert.equal(response.status, 200);
     await response.text();
     const params = seen.at(-1)!;
-    const forwarded = forwardedSystemInstructions(body.messages, cwd, configDir, false);
+    const forwarded = forwardedSystemInstructions(body.messages);
     const sdkSystem = typeof params.systemPrompt === "string" ? params.systemPrompt : params.systemPrompt?.append ?? "";
     assert.ok(sdkSystem.includes(forwarded), `real ${kind} system payload preserved`);
     if (kind !== "primary") {
@@ -129,7 +141,7 @@ try {
       assert.equal(params.maxTurns, 1);
     }
   }
-  assert.equal(seen.length, cases.length + fixture.requests.length, "each payload creates one SDK query; no OpenCode callbacks exist in this test");
+  assert.equal(seen.length, cases.length + 3 + fixture.requests.length, "each payload creates one SDK query; no OpenCode callbacks exist in this test");
   console.log("transformed context regression ok");
 } finally {
   await proxy.stopProxy();

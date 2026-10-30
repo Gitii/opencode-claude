@@ -86,7 +86,7 @@ async function main() {
     );
   });
 
-  const turn1 = [{ role: "user", content: "hello" }];
+  const turn1 = [{ role: "system", content: "CHAT_FINDINGS_OLD" }, { role: "user", content: "hello" }];
   await (await post("chat", { tools: [bashTool], messages: turn1 })).json();
   const live = [...turn1, { role: "assistant", content: "hi" }, { role: "user", content: "find the needle" }];
   const first = (await (await post("chat", { tools: [bashTool], messages: live })).json()) as any;
@@ -101,7 +101,7 @@ async function main() {
   // The background summary, written while the turn waits on its tool.
   const res = await post("chat", {
     tools: [bashTool],
-    messages: [...step, { role: "user", content: SUMMARY_PROMPT }],
+    messages: [{ role: "system", content: "COMPACTION_FINDINGS_CURRENT" }, ...step.filter((m) => m.role !== "system"), { role: "user", content: SUMMARY_PROMPT }],
   });
   assert.equal(res.status, 200);
   assert.match(((await res.json()) as any).choices[0].message.content, /the summary/);
@@ -110,6 +110,11 @@ async function main() {
   assert.equal(getForeignSessionId("chat"), SESSION, "the binding stays");
   const params = summary as StartClaudeQueryParams | null;
   assert.ok(params, "the summary ran");
+  assert.equal(typeof params!.systemPrompt, "string");
+  assert.match(params!.systemPrompt as string, /COMPACTION_FINDINGS_CURRENT/);
+  assert.doesNotMatch(params!.systemPrompt as string, /CHAT_FINDINGS_OLD/);
+  assert.deepEqual(params!.settingSources, []);
+  assert.deepEqual(params!.tools, []);
   assert.equal(params!.resume, SESSION);
   assert.equal(params!.resumeSessionAt, "T1", "resumes at the end of the turn before the live one");
   const text = await promptText(params!.prompt);

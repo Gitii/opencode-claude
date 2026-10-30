@@ -417,12 +417,16 @@ export async function startClaudeQuery(
     settings.disableClaudeAiConnectors = true;
   }
 
+  // A resumed turn must use this request's system prompt, not the session's
+  // persisted snapshot. This CLI switch applies to initial queries too.
+  const extraArgs: Record<string, string> = { "system-prompt-snapshot": "off" };
+  options.extraArgs = extraArgs;
   // Without these the CLI streams thinking blocks empty: the UI shows nothing
   // for as long as Claude thinks (tens of seconds), then the answer lands at
   // once. Summaries stream the reasoning as it happens (same as t3code).
   if ((options.thinking as { type?: string } | undefined)?.type !== "disabled") {
     settings.showThinkingSummaries = true;
-    options.extraArgs = { "thinking-display": "summarized" };
+    extraArgs["thinking-display"] = "summarized";
   }
 
   // The SDK's opt-in: without it the CLI reports fast mode off with

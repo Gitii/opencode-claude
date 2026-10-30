@@ -75,17 +75,19 @@ async function main() {
 
     // Thinking streams as summaries unless thinking is off
     assert.equal(seen.settings.showThinkingSummaries, true);
-    assert.deepEqual(seen.extraArgs, { "thinking-display": "summarized" });
+    assert.deepEqual(seen.extraArgs, { "system-prompt-snapshot": "off", "thinking-display": "summarized" });
     await startClaudeQuery({
       prompt: "x",
       cwd: process.cwd(),
       thinking: { type: "disabled" },
+      resume: "snapshot-resume",
       queryImpl: () => (input: any) => {
         seen = input.options;
         return (async function* () {})();
       },
     } as any);
-    assert.equal(seen.extraArgs, undefined);
+    assert.deepEqual(seen.extraArgs, { "system-prompt-snapshot": "off" });
+    assert.equal(seen.resume, "snapshot-resume");
     assert.equal(seen.settings?.showThinkingSummaries, undefined);
   }
 
@@ -1119,8 +1121,8 @@ async function main() {
     assert.match(body, /declined this request/);
     assert.match(body, /answer from opus/);
     assert.deepEqual(switched, [["ses_fallback", "claude-opus-5", undefined]]);
-    // Chat turns keep the user's Claude Code memory; only utility turns drop it.
-    assert.equal(chatEnv?.CLAUDE_CODE_DISABLE_AUTO_MEMORY, undefined);
+    // OpenCode supplies memory for chat and utility turns alike.
+    assert.equal(chatEnv?.CLAUDE_CODE_DISABLE_AUTO_MEMORY, "1");
     setModelFallbackHandler(null);
     setClaudeQueryStarter(null);
   }

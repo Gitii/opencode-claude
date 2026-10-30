@@ -35,6 +35,13 @@ export type ParkedBridge = {
   continueStream?: () => AsyncGenerator<unknown, void, unknown>;
   /** Claude Code config directory of a project mapped to another account. */
   configDir?: string;
+  /** Effective system instructions and tool definitions at query creation. */
+  contextSnapshot?: string;
+  /** Current dispatch's tool filter, also checked by old MCP registrations. */
+  admittedToolNames?: Set<string>;
+  /** Completed results held until a changed query can be resumed safely. */
+  completedResults?: Map<string, McpToolResultContent[]>;
+  completedMessages?: Map<string, { role: "tool"; tool_call_id: string; content?: unknown }>;
 };
 
 /**

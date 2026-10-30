@@ -33,12 +33,14 @@ async function main() {
     });
     const first = await post("compact-park", {
       tools: [bashTool],
-      messages: [{ role: "user", content: "run it" }],
+      messages: [{ role: "system", content: "STALE_INTENT_MEMORY" }, { role: "user", content: "run it" }],
     });
     assert.equal(((await first.json()) as any).choices[0].finish_reason, "tool_calls");
 
-    proxy.setClaudeQueryStarter(async () => {
+    proxy.setClaudeQueryStarter(async (params) => {
       log.push("summary:spawn");
+      assert.match(params.systemPrompt as string, /CURRENT_SUMMARY_STATE/);
+      assert.doesNotMatch(params.systemPrompt as string, /STALE_INTENT_MEMORY/);
       return interruptibleTurn(log, "summary", async function* () {
         yield textDelta("the summary");
         yield { type: "result", is_error: false, usage: {} };
@@ -46,6 +48,7 @@ async function main() {
     });
     const summary = await post("compact-park", {
       messages: [
+        { role: "system", content: "CURRENT_SUMMARY_STATE" },
         { role: "user", content: "run it" },
         { role: "user", content: "Create a detailed summary for continuing this coding session." },
       ],
@@ -56,16 +59,23 @@ async function main() {
     // the summary leaves the parked turn alone.
     assert.ok(!log.includes("turn:interrupt"), "the summary does not stop the chat's turn");
 
-    proxy.setClaudeQueryStarter(async () => {
+    proxy.setClaudeQueryStarter(async (params) => {
       log.push("next:spawn");
+      const system = params.systemPrompt as { append: string };
+      assert.match(system.append, /POST_COMPACTION_MEMORY/);
+      assert.doesNotMatch(system.append, /STALE_INTENT_MEMORY|CURRENT_SUMMARY_STATE/);
+      assert.deepEqual(params.tools, []);
+      assert.equal(params.mcpServers, undefined);
+      assert.deepEqual(params.settingSources, []);
       return interruptibleTurn(log, "next", async function* () {
         yield textDelta("continuing");
         yield { type: "result", is_error: false, usage: {} };
       });
     });
     const next = await post("compact-park", {
-      tools: [bashTool],
+      tools: [],
       messages: [
+        { role: "system", content: "POST_COMPACTION_MEMORY" },
         { role: "user", content: "What did we do so far?\n\nthe summary" },
         { role: "user", content: "Continue if you have next steps" },
       ],
